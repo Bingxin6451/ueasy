@@ -17,14 +17,21 @@ echo "[OK] javac"
 java -cp "$R8" com.android.tools.r8.D8 --lib "$AJAR" --release --min-api 24 --output dexout $(find classes -name '*.class')
 echo "[OK] d8"
 
-# 3. 从 apktool.jar 里取 aapt2
-mkdir -p apkbin
-cd apkbin
-unzip -o -q "$APKTOOL" "prebuilt/macosx/*"
-AAPT2="$(pwd)/$(find . -name 'aapt2*' -type f | head -1)"
-chmod +x "$AAPT2"
+# 3. 定位 aapt2：优先 $AAPT2，其次 build-tools，最后从 apktool.jar 提取
+if [ -n "$AAPT2_BIN" ] && [ -x "$AAPT2_BIN" ]; then
+  AAPT2="$AAPT2_BIN"
+elif [ -x /tmp/btools/android-14/aapt2 ]; then
+  AAPT2=/tmp/btools/android-14/aapt2
+elif [ -f "$APKTOOL" ]; then
+  mkdir -p apkbin && cd apkbin
+  unzip -o -q "$APKTOOL" "prebuilt/macosx/*"
+  AAPT2="$(pwd)/$(find . -name 'aapt2*' -type f | head -1)"
+  chmod +x "$AAPT2"
+  cd ..
+else
+  echo "找不到 aapt2，请设置 AAPT2_BIN"; exit 1
+fi
 echo "[OK] aapt2 -> $AAPT2"
-cd ..
 
 # 4. aapt2 compile & link
 if [ -d res ]; then

@@ -264,41 +264,14 @@ public class MainActivity extends Activity {
         }
     };
 
-    // 启动后无回执 → 自动换协议重试（烘干机/洗衣机协议可能判错）
+    // 启动后无回执：如实报告，不猜测协议、不盲发
     private final Runnable startWatchdog = new Runnable() {
         @Override
         public void run() {
             if (gotRxSinceStart) return;
-            if (currentGatt == null || writeCh == null) return;
-
-            if (fallbackCount >= 2) {
-                setStatus("✗ 设备没有任何回执，请点「机型不对？切换」后重试");
-                log("! 两种协议均无回执");
-                resetStartBtn();
-                return;
-            }
-            fallbackCount++;
-
-            if ("HNH".equals(currentProto)) {
-                setStatus("◐ 无回执，改用脉冲协议重试…");
-                log("! HNH 无回执 → 切 PULSE");
-                currentProto = "PULSE";
-                int pulse = (currentTarget != null && currentTarget.isDryer)
-                        ? DRYER_PULSES[selectedProgramIndex] : WASHER_PULSES[selectedProgramIndex];
-                queueSend(("X5750000" + pulse).getBytes(StandardCharsets.UTF_8));
-                queueSend(new byte[]{(byte) 0xA1, 0x01, (byte) pulse, 0x00,
-                        (byte) (0xA1 ^ 0x01 ^ pulse)});
-            } else {
-                setStatus("◐ 无回执，改用 HNH 握手重试…");
-                log("! PULSE 无回执 → 切 HNH");
-                currentProto = "HNH";
-                hnhFyKey = null;
-                hnhKeyIndex = 0;
-                pendingStart = true;
-                queueSend(buildHnhFrame("A70108", HNH_KEY_LADDER[0]));
-            }
-            gotRxSinceStart = false;
-            mainHandler.postDelayed(this, 2600);
+            setStatus("✗ 指令已发送但设备没有回执（" + currentProto + "）");
+            log("! " + currentProto + " 无回执，未做任何自动重试");
+            resetStartBtn();
         }
     };
 
@@ -925,13 +898,14 @@ public class MainActivity extends Activity {
     }
 
     /** 楼层机位编号：1-1 / 1_2 / 101 / 3F-2 / 3楼2 / A1-3 */
+    /** 楼层机位号：1-1 / 1_2 / 101 / 3F-2 / 3楼2 / A1-3。刻意收紧，避免把 2025 这类型号当机位 */
     private static boolean isRoomCodeName(String n) {
         if (n == null || n.isEmpty()) return false;
         return Pattern.matches("^\\d{1,2}[-_ ]\\d{1,2}$", n)
-                || Pattern.matches("^\\d{3,4}$", n)
+                || Pattern.matches("^\\d{3}$", n)
                 || Pattern.matches("^\\d{1,2}(F|L|楼)[-_ ]?\\d{1,2}$", n)
                 || Pattern.matches("^[A-Z]{1,2}\\d{1,2}[-_]\\d{1,2}$", n)
-                || n.contains("楼");
+                || Pattern.matches("^\\d{1,2}楼\\d{1,2}$", n);
     }
 
     /** 从设备名里推断楼层，用于卡片展示；推不出返回空串 */
@@ -980,11 +954,33 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    /**
+     * 严格识别：必须有「强证据」才认，服务 UUID 本身不算证据。
+     *
+     * 强证据（满足其一）：
+     *   1. MAC 落在已知设备表（整串或后 6 位）
+     *   2. MAC 前缀属于校园洗烘板厂牌 OUI（Minew / 云里物里方案）
+     *   3. 广播名含洗衣 / 烘干关键词
+     *   4. 广播名是 6 位十六进制校园编号
+     *   5. 广播名是楼层机位号（1-1 / 101 / 3F-2）
+     *
+     * 名称未知且 MAC 不在已知 OUI → 一律丢弃。
+     * 原因：fff0 / fee9 / ffe0 是通用 UUID，手环、电子秤、门锁、玩具都在用，
+     * 只按 UUID 判定会把整栋楼的路人设备都收进来。
+     */
     private LaundryProbeResult auditLaundryDevice(String mac, String advName, ScanRecord record) {
         LaundryProbeResult res = new LaundryProbeResult();
         String uMac = mac.toUpperCase();
         String uName = (advName != null) ? advName.trim().toUpperCase() : "";
+        String macEnd = uMac.replace(":", "");
+        String tail6 = macEnd.length() >= 6 ? macEnd.substring(macEnd.length() - 6) : macEnd;
 
+        // 0. 负向词表优先：明确的非洗衣产品直接丢弃
+        if (isNonLaundryName(uName)) {
+            return res;
+        }
+
+        // 1. 已知 MAC（整串）
         if (KNOWN_SCVTC.containsKey(uMac)) {
             res.matched = true;
             res.parsedName = KNOWN_SCVTC.get(uMac);
@@ -992,112 +988,66 @@ public class MainActivity extends Activity {
             res.proto = res.isDryer ? "HNH" : "YQ";
             return res;
         }
-
-        // 先排除明确不是洗衣设备的蓝牙产品（耳机 / 音箱 / 手环 / 家电等）
-        if (isNonLaundryName(uName)) {
-            res.matched = false;
-            return res;
-        }
-
-        // 楼层机位编号（1-1 / 101 / 3F-2 / 3楼2 等）：校园洗衣房最常见命名
-        if (isRoomCodeName(uName)) {
+        // 1b. 已知 MAC（后 6 位）
+        if (KNOWN_SCVTC.containsKey(tail6)) {
             res.matched = true;
-            res.isDryer = uName.contains("烘") || uName.contains("干") || uName.contains("HG")
-                    || uName.contains("DRY");
+            res.parsedName = KNOWN_SCVTC.get(tail6);
+            res.isDryer = res.parsedName.contains("烘干");
             res.proto = res.isDryer ? "HNH" : "YQ";
+            return res;
+        }
+
+        // 2. 厂牌 OUI：这类板子只用于校园洗烘/物联，可作为强证据
+        boolean knownOui = uMac.startsWith("AC:23:3F:42") || uMac.startsWith("AC:23:3F:41")
+                || uMac.startsWith("AC:23:3F:53") || uMac.startsWith("AC:9A:22:54")
+                || uMac.startsWith("C8:47:8C") || uMac.startsWith("F0:13:C3");
+
+        // 3/4/5. 名称证据
+        boolean nameLaundry = isLaundryName(uName);
+        boolean nameHex6 = isHex6Name(uName);
+        boolean nameRoom = isRoomCodeName(uName);
+
+        if (!(knownOui || nameLaundry || nameHex6 || nameRoom)) {
+            // 无强证据：即便广播里有 fff0 / fee9 也不认
+            return res;
+        }
+
+        // 到这里才认定为洗衣设备，协议只用 UUID 来「判型」，不作为入网依据
+        String proto = protocolFromUuids(record);
+        boolean dryerByProto = "HNH".equals(proto);
+        boolean dryerByName = uName.contains("烘干") || uName.contains("干衣") || uName.contains("烘")
+                || uName.contains("HGJ") || uName.contains("DRY") || uName.startsWith("HG_")
+                || uName.startsWith("HG-") || uName.startsWith("HNH") || uMac.contains("53:0B");
+
+        res.matched = true;
+        res.isDryer = dryerByProto || dryerByName;
+        res.proto = proto;
+
+        if (!uName.isEmpty() && !isHex6Name(uName) && !isRoomCodeName(uName)) {
+            res.parsedName = uName;
+        } else if (!uName.isEmpty()) {
             res.parsedName = (res.isDryer ? "烘干机 " : "洗衣机 ") + uName;
-            return res;
+        } else {
+            res.parsedName = (res.isDryer ? "烘干机 " : "洗衣机 ") + tail6;
         }
-
-        String macEnd = uMac.replace(":", "");
-        if (macEnd.length() >= 6) {
-            String s6 = macEnd.substring(macEnd.length() - 6);
-            if (KNOWN_SCVTC.containsKey(s6)) {
-                res.matched = true;
-                res.parsedName = KNOWN_SCVTC.get(s6);
-                res.isDryer = res.parsedName.contains("烘干");
-                res.proto = res.isDryer ? "HNH" : "YQ";
-                return res;
-            }
-        }
-
-        List<ParcelUuid> uuids = (record != null) ? record.getServiceUuids() : null;
-        if (uuids != null) {
-            for (ParcelUuid pu : uuids) {
-                String u = short16(pu.getUuid());
-                if (u == null) continue;
-                if (u.equals("fff0")) {
-                    res.matched = true;
-                    res.isDryer = false;
-                    res.proto = "YQ";
-                    res.parsedName = !uName.isEmpty() ? uName : ("洗衣机 " + macEnd.substring(Math.max(0, macEnd.length() - 6)));
-                    return res;
-                }
-                if (u.equals("fee9") || u.equals("fee8")) {
-                    res.matched = true;
-                    res.isDryer = true;
-                    res.proto = "HNH";
-                    res.parsedName = !uName.isEmpty() ? uName : ("烘干机 " + macEnd.substring(Math.max(0, macEnd.length() - 6)));
-                    return res;
-                }
-                if (u.equals("ffe0") || u.equals("fee0") || u.equals("ff00") || u.equals("fff1")) {
-                    res.matched = true;
-                    res.isDryer = false;
-                    res.proto = "PULSE";
-                    res.parsedName = !uName.isEmpty() ? uName : ("脉冲洗衣机 " + macEnd.substring(Math.max(0, macEnd.length() - 6)));
-                    return res;
-                }
-            }
-        }
-
-        if (!uName.isEmpty()) {
-            if (uName.startsWith("XN-") || uName.contains("WATER") || uName.contains("CFJ")) {
-                res.matched = false;
-                return res;
-            }
-            if (uName.contains("烘干") || uName.contains("干衣") || uName.contains("HGJ")
-                    || uName.startsWith("HG_") || uName.startsWith("HG-") || uName.contains("DRY")
-                    || uName.startsWith("HNH") || uName.contains("530B")) {
-                res.matched = true;
-                res.isDryer = true;
-                res.proto = "HNH";
-                res.parsedName = "烘干机 · " + uName;
-                return res;
-            }
-            if (uName.contains("洗衣") || uName.contains("脱水") || uName.contains("XYJ")
-                    || uName.startsWith("XY_") || uName.startsWith("XY-") || uName.contains("WASH")
-                    || uName.startsWith("YQ") || uName.contains("CLOTHES")) {
-                res.matched = true;
-                res.isDryer = false;
-                res.proto = "YQ";
-                res.parsedName = "洗衣机 · " + uName;
-                return res;
-            }
-            if (Pattern.matches("^[0-9A-F]{6}$", uName)) {
-                res.matched = true;
-                res.isDryer = uName.startsWith("53");
-                res.proto = res.isDryer ? "HNH" : "YQ";
-                res.parsedName = (res.isDryer ? "烘干机 " : "洗衣机 ") + uName;
-                return res;
-            }
-        }
-
-        if (uMac.startsWith("AC:23:3F:42") || uMac.startsWith("AC:23:3F:41")) {
-            res.matched = true;
-            res.isDryer = false;
-            res.proto = "YQ";
-            res.parsedName = "洗衣机 " + macEnd.substring(macEnd.length() - 6);
-            return res;
-        } else if (uMac.startsWith("AC:23:3F:53") || uMac.startsWith("AC:9A:22:54")) {
-            res.matched = true;
-            res.isDryer = true;
-            res.proto = "HNH";
-            res.parsedName = "烘干机 " + macEnd.substring(macEnd.length() - 6);
-            return res;
-        }
-
-        res.matched = false;
         return res;
+    }
+
+    /** 只用来判断协议类型，不再作为「这是洗衣设备」的依据 */
+    private static String protocolFromUuids(ScanRecord record) {
+        List<ParcelUuid> uuids = (record != null) ? record.getServiceUuids() : null;
+        if (uuids == null) return "AUTO";
+        String best = "AUTO";
+        for (ParcelUuid pu : uuids) {
+            String u = short16(pu.getUuid());
+            if (u == null) continue;
+            if (u.equals("fff0")) return "YQ";
+            if (u.equals("fee9") || u.equals("fee8")) best = "HNH";
+            else if (u.equals("ffe0") || u.equals("fee0") || u.equals("ff00")) {
+                if (!"HNH".equals(best)) best = "PULSE";
+            }
+        }
+        return best;
     }
 
     // =====================================================================
@@ -1593,7 +1543,7 @@ public class MainActivity extends Activity {
                             BluetoothGattCharacteristic c = firstWritable(svc);
                             if (c != null) {
                                 writeCh = c;
-                                if ("UNKNOWN".equals(currentProto)) currentProto = "PULSE";
+                                // 找不到已知服务就不猜协议，留给 doStartCommand 拒绝发送
                                 break;
                             }
                         }
@@ -1748,10 +1698,11 @@ public class MainActivity extends Activity {
                 sendHnhStart();
             }
         } else {
-            String cmd = "X5750000" + pulse;
-            queueSend(cmd.getBytes(StandardCharsets.UTF_8));
-            byte[] pulseBin = new byte[]{(byte) 0xA1, 0x01, (byte) pulse, 0x00, (byte) (0xA1 ^ 0x01 ^ pulse)};
-            queueSend(pulseBin);
+            // 协议未识别：不发送任何猜测指令，避免未知设备被乱写一通
+            setStatus("✗ 未识别该设备协议（" + currentProto + "），已停止发送");
+            log("! proto=" + currentProto + " 非 YQ/HNH，拒绝盲发");
+            resetStartBtn();
+            return;
         }
 
         if (startBtn != null) {
