@@ -10,7 +10,7 @@ export PATH="$JDK:$PATH"
 # 1. 编译
 rm -rf classes dexout out.apk res.zip
 mkdir -p classes dexout
-javac -source 11 -target 11 -classpath "$AJAR" -d classes MainActivity.java UiKit.java LogSink.java
+javac -source 11 -target 11 -classpath "$AJAR" -d classes MainActivity.java UiKit.java LogSink.java Prefs.java
 echo "[OK] javac"
 
 # 2. dex via r8(d8)

@@ -205,6 +205,11 @@ public class MainActivity extends Activity {
     private final Map<String, Long> lastScanLogAt = new HashMap<>();
 
     private final StringBuilder logBuf = new StringBuilder();
+    private Prefs prefs;
+    private int myFloor = 0;
+    private TextView floorBtn;
+    private LinearLayout otherFloorBox;
+    private LinearLayout myFloorCard;
 
     // ==================== 后端循环 ====================
     private long lastSortTime = 0;
@@ -418,6 +423,9 @@ public class MainActivity extends Activity {
             }
         }
 
+        prefs = new Prefs(this);
+        myFloor = prefs.myFloor();
+
         BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         if (bm != null) {
             bluetoothAdapter = bm.getAdapter();
@@ -508,14 +516,16 @@ public class MainActivity extends Activity {
         titleCol.addView(appBarSub);
         appBar.addView(titleCol);
 
-        TextView help = medium(text(this, "使用帮助", 13, PRIMARY));
-        help.setOnClickListener(new View.OnClickListener() {
+        floorBtn = medium(text(this, myFloor > 0 ? myFloor + " 楼" : "我的楼层", 13, PRIMARY));
+        floorBtn.setBackground(stroke(this, PRIMARY_SOFT, PRIMARY_BORDER, 100));
+        floorBtn.setPadding(dp(10), dp(6), dp(10), dp(6));
+        floorBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showHelp();
+                showFloorPicker();
             }
         });
-        appBar.addView(help);
+        appBar.addView(floorBtn);
         root.addView(appBar);
 
         View appBarLine = new View(this);
@@ -586,8 +596,17 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         homeContent.addView(spacer(this, 14));
 
+        // 我的楼层分组
+        myFloorCard = vbox(this);
+        homeContent.addView(myFloorCard);
+
         deviceListBox = vbox(this);
         homeContent.addView(deviceListBox);
+
+        // 其他楼层（折叠）
+        otherFloorBox = vbox(this);
+        otherFloorBox.setVisibility(View.GONE);
+        homeContent.addView(otherFloorBox);
 
         // 空态
         emptyBox = card(this);
@@ -764,6 +783,79 @@ public class MainActivity extends Activity {
         debugCard.addView(logScroll, margins(this,
                 lp(ViewGroup.LayoutParams.MATCH_PARENT, dp(140)), 0, 10, 0, 0));
         actionPanel.addView(debugCard);
+    }
+
+    // =====================================================================
+    // 楼层选择
+    // =====================================================================
+    private void showFloorPicker() {
+        final String[] items = {"未设置", "1 楼", "2 楼", "3 楼", "4 楼", "5 楼", "6 楼", "7 楼"};
+        new AlertDialog.Builder(this)
+                .setTitle("我在几楼")
+                .setSingleChoiceItems(items, myFloor, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        myFloor = which;
+                        prefs.setMyFloor(which);
+                        floorBtn.setText(which > 0 ? which + " 楼" : "我的楼层");
+                        renderDeviceList();
+                        dialog.dismiss();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 给某台设备单独指定楼层（同名设备多时可精确归位） */
+    private void showDeviceFloorPicker(final MachineTarget m) {
+        final String[] items = {"不指定（按设备名推断）", "1 楼", "2 楼", "3 楼", "4 楼", "5 楼", "6 楼", "7 楼"};
+        int cur = prefs.deviceFloor(m.mac);
+        new AlertDialog.Builder(this)
+                .setTitle("这台设备在几楼")
+                .setSingleChoiceItems(items, cur, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        prefs.setDeviceFloor(m.mac, which);
+                        renderDeviceList();
+                        dialog.dismiss();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // =====================================================================
+    // 设备命名
+    // =====================================================================
+    private void showRenameDialog(final MachineTarget m) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(displayName(m));
+        input.setHint("例如：3号机 / 靠窗那台");
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setPadding(dp(20), dp(12), dp(20), dp(12));
+
+        new AlertDialog.Builder(this)
+                .setTitle("给这台设备起个名字")
+                .setMessage(m.name + "\n" + m.mac)
+                .setView(input)
+                .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        prefs.setCustomName(m.mac, input.getText().toString());
+                        renderDeviceList();
+                        toast("已保存");
+                    }
+                })
+                .setNeutralButton("恢复默认", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        prefs.setCustomName(m.mac, null);
+                        renderDeviceList();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void showHelp() {
@@ -1227,14 +1319,108 @@ public class MainActivity extends Activity {
         renderDeviceList();
     }
 
-    private void renderDeviceList() {
-        deviceListBox.removeAllViews();
-        emptyBox.setVisibility(stableDisplayList.isEmpty() ? View.VISIBLE : View.GONE);
-
-        int count = Math.min(stableDisplayList.size(), 12);
-        for (int i = 0; i < count; i++) {
-            deviceListBox.addView(buildDeviceCard(stableDisplayList.get(i), i));
+    /** 设备的有效楼层：用户设过的优先，其次设备名推断，都没有返回 0 */
+    private int floorOf(MachineTarget m) {
+        int f = prefs.deviceFloor(m.mac);
+        if (f > 0) return f;
+        String label = floorLabel(m.name);
+        if (!label.isEmpty()) {
+            try {
+                return Integer.parseInt(label.replaceAll("[^0-9]", ""));
+            } catch (Exception ignored) {
+            }
         }
+        return 0;
+    }
+
+    /** 显示名：用户起的名字优先，否则用识别出来的名字 */
+    private String displayName(MachineTarget m) {
+        String custom = prefs.customName(m.mac);
+        return custom != null ? custom : m.name;
+    }
+
+    private void renderDeviceList() {
+        if (deviceListBox == null) return;
+        deviceListBox.removeAllViews();
+        if (myFloorCard != null) myFloorCard.removeAllViews();
+        if (otherFloorBox != null) otherFloorBox.removeAllViews();
+
+        int total = Math.min(stableDisplayList.size(), 24);
+        emptyBox.setVisibility(total == 0 ? View.VISIBLE : View.GONE);
+        appBarSub.setText(myFloor > 0
+                ? "我的楼层：" + myFloor + " 楼 · 发现 " + total + " 台"
+                : "靠近设备 · 选程序 · 一键启动");
+
+        if (total == 0) return;
+
+        // 分成「我的楼层」和「其他楼层」
+        java.util.List<MachineTarget> mine = new java.util.ArrayList<>();
+        java.util.List<MachineTarget> others = new java.util.ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            MachineTarget m = stableDisplayList.get(i);
+            int f = floorOf(m);
+            if (myFloor > 0 && f == myFloor) mine.add(m);
+            else others.add(m);
+        }
+
+        if (!mine.isEmpty()) {
+            myFloorCard.addView(sectionRow(myFloor + " 楼 · 我的楼层", mine.size(), PRIMARY));
+            for (int i = 0; i < mine.size(); i++) {
+                myFloorCard.addView(buildDeviceCard(mine.get(i), i));
+            }
+            myFloorCard.setPadding(0, 0, 0, dp(6));
+        }
+
+        if (!others.isEmpty()) {
+            if (!mine.isEmpty()) {
+                TextView t = medium(text(this, "查看其他楼层的设备（" + others.size() + "）", 13, TEXT_2));
+                t.setGravity(Gravity.CENTER);
+                t.setPadding(0, dp(14), 0, dp(14));
+                myFloorCard.addView(t);
+                t.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        boolean show = otherFloorBox.getVisibility() != View.VISIBLE;
+                        otherFloorBox.setVisibility(show ? View.VISIBLE : View.GONE);
+                        ((TextView) v).setText(show
+                                ? "收起其他楼层（" + others.size() + "）"
+                                : "查看其他楼层的设备（" + others.size() + "）");
+                    }
+                });
+            }
+
+            // 按楼层分组
+            java.util.TreeMap<Integer, java.util.List<MachineTarget>> byFloor = new java.util.TreeMap<>();
+            for (MachineTarget m : others) {
+                int f = floorOf(m);
+                if (!byFloor.containsKey(f)) byFloor.put(f, new java.util.ArrayList<MachineTarget>());
+                byFloor.get(f).add(m);
+            }
+            for (java.util.Map.Entry<Integer, java.util.List<MachineTarget>> e : byFloor.entrySet()) {
+                int f = e.getKey();
+                String title = f > 0 ? f + " 楼" : "未标注楼层";
+                otherFloorBox.addView(sectionRow(title, e.getValue().size(), MUTED));
+                for (int i = 0; i < e.getValue().size(); i++) {
+                    otherFloorBox.addView(buildDeviceCard(e.getValue().get(i), i));
+                }
+            }
+            if (mine.isEmpty()) otherFloorBox.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /** 分组标题行 */
+    private View sectionRow(String title, int count, int accent) {
+        LinearLayout row = hbox(this);
+        TextView t = medium(text(this, title, 14, TEXT));
+        t.setLayoutParams(weight(this, 1f));
+        row.addView(t);
+        TextView c = pill(this, count + " 台", accent, accent == PRIMARY ? PRIMARY_SOFT : SURFACE_2);
+        row.addView(c);
+        LinearLayout wrap = vbox(this);
+        wrap.addView(row, margins(this,
+                lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+                2, 4, 2, 10));
+        return wrap;
     }
 
     private View buildDeviceCard(final MachineTarget m, int index) {
@@ -1247,6 +1433,7 @@ public class MainActivity extends Activity {
             }
         });
 
+        // 第一行：图标 + 名字 + 改名按钮
         LinearLayout top = hbox(this);
         TextView icon = text(this, m.isDryer ? "♨" : "🌀", 22, PRIMARY);
         icon.setGravity(Gravity.CENTER);
@@ -1256,14 +1443,21 @@ public class MainActivity extends Activity {
         LinearLayout info = vbox(this);
         info.setPadding(dp(12), 0, dp(8), 0);
         info.setLayoutParams(weight(this, 1f));
-        TextView nameTv = medium(text(this, m.name, 16, TEXT));
+
+        String shown = displayName(m);
+        boolean renamed = prefs.customName(m.mac) != null;
+        TextView nameTv = medium(text(this, shown, 17, TEXT));
         nameTv.setSingleLine(true);
         info.addView(nameTv);
-        String floor = floorLabel(m.name);
-        TextView subTv = text(this,
-                (floor.isEmpty() ? "" : floor + " · ") + (m.isDryer ? "烘干机" : "洗衣机")
-                        + " · 约 " + String.format("%.1f", m.getDistance())
-                        + " 米 · " + RssiBars.levelText(m.smoothedRssi), 12, MUTED);
+
+        // 副信息：楼层 · 类型 · 距离 · 信号（原设备名放最后，便于辨认）
+        int f = floorOf(m);
+        StringBuilder sub = new StringBuilder();
+        sub.append(f > 0 ? f + " 楼 · " : "");
+        sub.append(m.isDryer ? "烘干机" : "洗衣机");
+        sub.append(" · 约 ").append(String.format("%.1f", m.getDistance())).append(" 米");
+        if (renamed) sub.append(" · ").append(m.name);
+        TextView subTv = text(this, sub.toString(), 12, MUTED);
         subTv.setPadding(0, dp(5), 0, 0);
         info.addView(subTv);
         top.addView(info);
@@ -1273,11 +1467,36 @@ public class MainActivity extends Activity {
         top.addView(bars, lp(dp(24), dp(18)));
         cardBox.addView(top);
 
+        // 第二行：命名 + 使用
         LinearLayout bottom = hbox(this);
         bottom.setPadding(0, dp(12), 0, 0);
-        TextView progCount = text(this, m.isDryer ? "4 档烘干程序" : "4 档洗涤程序", 13, TEXT_2);
-        progCount.setLayoutParams(weight(this, 1f));
-        bottom.addView(progCount);
+
+        TextView rename = medium(text(this, renamed ? "✎ 改名" : "✎ 命名", 13, TEXT_2));
+        rename.setBackground(stroke(this, SURFACE_2, BORDER, 8));
+        rename.setPadding(dp(12), dp(8), dp(12), dp(8));
+        rename.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showRenameDialog(m);
+            }
+        });
+        bottom.addView(rename);
+
+        TextView setFloor = medium(text(this, "楼层", 13, TEXT_2));
+        setFloor.setBackground(stroke(this, SURFACE_2, BORDER, 8));
+        setFloor.setPadding(dp(12), dp(8), dp(12), dp(8));
+        setFloor.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showDeviceFloorPicker(m);
+            }
+        });
+        bottom.addView(setFloor, margins(this,
+                lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT), 8, 0, 0, 0));
+
+        View fill = new View(this);
+        fill.setLayoutParams(weight(this, 1f));
+        bottom.addView(fill);
 
         TextView use = medium(text(this, "使用", 14, Color.WHITE));
         use.setGravity(Gravity.CENTER);
@@ -1287,7 +1506,7 @@ public class MainActivity extends Activity {
 
         LinearLayout wrap = vbox(this);
         wrap.addView(cardBox, margins(this,
-                lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT), 0, 0, 0, 12));
+                lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT), 0, 0, 0, 10));
         return wrap;
     }
 
@@ -1331,7 +1550,7 @@ public class MainActivity extends Activity {
 
     private void refreshControlHeader() {
         if (currentTarget == null) return;
-        actionTargetTv.setText(currentTarget.name);
+        actionTargetTv.setText(displayName(currentTarget));
         StringBuilder sb = new StringBuilder();
         String fl = floorLabel(currentTarget.name);
         if (!fl.isEmpty()) sb.append(fl).append(" · ");
