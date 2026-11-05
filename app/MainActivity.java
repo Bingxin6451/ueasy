@@ -107,12 +107,10 @@ public class MainActivity extends Activity {
     }};
 
     private static final String[] WASHER_NAMES = {"单脱水", "快速洗", "标准洗", "大件洗"};
-    private static final String[] WASHER_PRICES = {"0.80", "1.50", "2.50", "2.80"};
     private static final int[] WASHER_PULSES = {1, 2, 3, 4};
     private static final String[] WASHER_SUB = {"约 8 分钟", "约 20 分钟", "约 35 分钟", "约 45 分钟"};
 
     private static final String[] DRYER_NAMES = {"低温烘干", "标准烘干", "强力烘干", "超长烘干"};
-    private static final String[] DRYER_PRICES = {"1.50", "2.50", "3.50", "4.50"};
     private static final int[] DRYER_PULSES = {1, 2, 3, 4};
     private static final String[] DRYER_SUB = {"15 分钟", "30 分钟", "45 分钟", "60 分钟"};
 
@@ -634,9 +632,9 @@ public class MainActivity extends Activity {
         bottomBar.setVisibility(View.GONE);
 
         LinearLayout priceCol = vbox(this);
-        TextView priceLabel = text(this, "应付金额", 11, MUTED);
+        TextView priceLabel = text(this, "已选程序", 11, MUTED);
         priceCol.addView(priceLabel);
-        priceTv = medium(text(this, "¥ --", 24, PRIMARY));
+        priceTv = medium(text(this, "未选择", 18, PRIMARY));
         priceCol.addView(priceTv, margins(this,
                 lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT), 0, 2, 0, 0));
         bottomBar.addView(priceCol);
@@ -1277,9 +1275,7 @@ public class MainActivity extends Activity {
 
         LinearLayout bottom = hbox(this);
         bottom.setPadding(0, dp(12), 0, 0);
-        TextView price = medium(text(this, priceRange(m.isDryer), 15, TEXT));
-        bottom.addView(price);
-        TextView progCount = text(this, "  ·  4 档程序", 12, MUTED);
+        TextView progCount = text(this, m.isDryer ? "4 档烘干程序" : "4 档洗涤程序", 13, TEXT_2);
         progCount.setLayoutParams(weight(this, 1f));
         bottom.addView(progCount);
 
@@ -1293,10 +1289,6 @@ public class MainActivity extends Activity {
         wrap.addView(cardBox, margins(this,
                 lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT), 0, 0, 0, 12));
         return wrap;
-    }
-
-    private String priceRange(boolean dryer) {
-        return dryer ? "¥1.50 – 4.50" : "¥0.80 – 2.80";
     }
 
     private void showHome() {
@@ -1359,7 +1351,6 @@ public class MainActivity extends Activity {
         programRow.removeAllViews();
         boolean isDryer = (currentTarget != null && currentTarget.isDryer);
         final String[] names = isDryer ? DRYER_NAMES : WASHER_NAMES;
-        final String[] prices = isDryer ? DRYER_PRICES : WASHER_PRICES;
         final String[] subs = isDryer ? DRYER_SUB : WASHER_SUB;
 
         for (int i = 0; i < names.length; i++) {
@@ -1395,8 +1386,6 @@ public class MainActivity extends Activity {
             nameCol.addView(dur);
             row.addView(nameCol);
 
-            row.addView(medium(text(this, "¥ " + prices[idx], 16, isSel ? PRIMARY : TEXT_2)));
-
             programRow.addView(row, margins(this,
                     lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
                     0, 0, 0, idx == names.length - 1 ? 0 : 8));
@@ -1404,7 +1393,8 @@ public class MainActivity extends Activity {
 
         if (selectedProgramIndex >= 0 && selectedProgramIndex < names.length) {
             if (priceTv != null) {
-                priceTv.setText("¥ " + prices[selectedProgramIndex]);
+                priceTv.setText(names[selectedProgramIndex]);
+                priceTv.setTextColor(isDryer ? AMBER : PRIMARY);
             }
             if (startBtn != null) {
                 startBtn.setText("立即启动 · " + names[selectedProgramIndex]);
