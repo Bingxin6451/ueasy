@@ -393,6 +393,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        prefs = new Prefs(this);
+        UiKit.init(prefs.isNight());
+
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
@@ -409,7 +412,8 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(SURFACE);
             getWindow().setNavigationBarColor(SURFACE);
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            int flags = UiKit.night ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -428,7 +432,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        prefs = new Prefs(this);
         myFloor = prefs.myFloor();
 
         BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
@@ -521,13 +524,13 @@ public class MainActivity extends Activity {
         TextView tv = new TextView(this);
         tv.setText(sb.toString());
         tv.setTextSize(11);
-        tv.setTextColor(Color.parseColor("#101828"));
-        tv.setBackgroundColor(Color.parseColor("#F4F6FA"));
+        tv.setTextColor(TEXT);
+        tv.setBackgroundColor(BG);
         tv.setPadding(dp(20), dp(60), dp(20), dp(20));
         tv.setTextIsSelectable(true);
 
         ScrollView sc = new ScrollView(this);
-        sc.setBackgroundColor(Color.parseColor("#F4F6FA"));
+        sc.setBackgroundColor(BG);
         sc.addView(tv);
         setContentView(sc);
     }
@@ -572,6 +575,17 @@ public class MainActivity extends Activity {
         });
         appBar.addView(floorBtn);
 
+        TextView themeBtn = medium(text(this, UiKit.night ? "☀" : "☾", 18, TEXT_2));
+        themeBtn.setGravity(Gravity.CENTER);
+        themeBtn.setPadding(dp(8), 0, dp(8), dp(4));
+        themeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleTheme();
+            }
+        });
+        appBar.addView(themeBtn);
+
         TextView moreBtn = medium(text(this, "⋯", 20, TEXT_2));
         moreBtn.setGravity(Gravity.CENTER);
         moreBtn.setPadding(dp(10), 0, dp(2), dp(6));
@@ -610,7 +624,7 @@ public class MainActivity extends Activity {
         updateBannerTv = medium(text(this, "", 13, PRIMARY_DARK));
         updateBannerTv.setLayoutParams(weight(this, 1f));
         updateBanner.addView(updateBannerTv);
-        TextView updateGo = medium(text(this, "更新", 13, Color.WHITE));
+        TextView updateGo = medium(text(this, "更新", 13, UiKit.onAccentText()));
         updateGo.setGravity(Gravity.CENTER);
         updateGo.setBackground(fill(this, PRIMARY, 8));
         updateGo.setPadding(dp(14), dp(6), dp(14), dp(6));
@@ -936,6 +950,14 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** 白天 / 黑夜切换：存偏好后重建界面 */
+    private void toggleTheme() {
+        boolean toNight = !UiKit.night;
+        prefs.setNight(toNight);
+        UiKit.init(toNight);
+        recreate();
+    }
+
     /** 更新回调：只用页面横幅，不用 Dialog */
     private final UpdateChecker.Listener updateListener = new UpdateChecker.Listener() {
         @Override
@@ -986,6 +1008,7 @@ public class MainActivity extends Activity {
     /** 顶部「⋯」菜单 */
     private void showMenu() {
         final String[] items = {
+                UiKit.night ? "切换到白天模式" : "切换到黑夜模式",
                 showAllDevices ? "关闭诊断模式" : "诊断模式（查看所有蓝牙设备）",
                 "检查更新（当前 " + UpdateChecker.currentVersionName(this) + "）",
                 "使用帮助",
@@ -998,6 +1021,9 @@ public class MainActivity extends Activity {
                     public void onClick(android.content.DialogInterface dialog, int which) {
                         switch (which) {
                             case 0:
+                                toggleTheme();
+                                break;
+                            case 1:
                                 showAllDevices = !showAllDevices;
                                 synchronized (machines) {
                                     machines.clear();
@@ -1008,14 +1034,14 @@ public class MainActivity extends Activity {
                                         ? "诊断模式已开：显示全部蓝牙设备"
                                         : "已关闭诊断模式");
                                 break;
-                            case 1:
+                            case 2:
                                 toast("正在检查更新…");
                                 new UpdateChecker(MainActivity.this).check(true, updateListener);
                                 break;
-                            case 2:
+                            case 3:
                                 showHelp();
                                 break;
-                            case 3:
+                            case 4:
                                 new AlertDialog.Builder(MainActivity.this)
                                         .setTitle("确认清空？")
                                         .setMessage("会删除你给设备起的名字和楼层设置。")
@@ -1710,7 +1736,7 @@ public class MainActivity extends Activity {
         fill.setLayoutParams(weight(this, 1f));
         bottom.addView(fill);
 
-        TextView use = medium(text(this, "使用", 14, Color.WHITE));
+        TextView use = medium(text(this, "使用", 14, UiKit.onAccentText()));
         use.setGravity(Gravity.CENTER);
         use.setBackground(fill(this, PRIMARY, 10));
         bottom.addView(use, lp(dp(76), dp(38)));
@@ -1846,7 +1872,7 @@ public class MainActivity extends Activity {
         if (startBtn != null) {
             startBtn.setEnabled(on);
             if (on) {
-                startBtn.setTextColor(Color.WHITE);
+                startBtn.setTextColor(UiKit.onAccentText());
                 startBtn.setBackground(gradient(this, PRIMARY, PRIMARY_DARK, 12));
             } else {
                 startBtn.setTextColor(MUTED);

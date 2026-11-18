@@ -19,6 +19,15 @@ final class Prefs {
         sp = c.getApplicationContext().getSharedPreferences(FILE, Context.MODE_PRIVATE);
     }
 
+    /** 深色模式 */
+    boolean isNight() {
+        return sp.getBoolean("night_mode", false);
+    }
+
+    void setNight(boolean night) {
+        sp.edit().putBoolean("night_mode", night).apply();
+    }
+
     /** 我的楼层，0 表示未设置 */
     int myFloor() {
         return sp.getInt(KEY_FLOOR, 0);

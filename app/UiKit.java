@@ -21,33 +21,89 @@ import android.widget.TextView;
  */
 final class UiKit {
 
-    // ---------- 配色（浅色工具风） ----------
-    static final int BG = Color.parseColor("#F4F6FA");
-    static final int SURFACE = Color.parseColor("#FFFFFF");
-    static final int SURFACE_2 = Color.parseColor("#F8FAFC");
-    static final int BORDER = Color.parseColor("#E4E9F0");
-    static final int BORDER_SOFT = Color.parseColor("#EEF2F7");
+    // ---------- 配色：浅色 / 深色两套，运行时切换 ----------
+    static boolean night = false;
 
-    static final int TEXT = Color.parseColor("#101828");
-    static final int TEXT_2 = Color.parseColor("#475467");
-    static final int MUTED = Color.parseColor("#98A2B3");
+    static int BG, SURFACE, SURFACE_2, BORDER, BORDER_SOFT;
+    static int TEXT, TEXT_2, MUTED;
+    static int PRIMARY, PRIMARY_DARK, PRIMARY_SOFT, PRIMARY_BORDER;
+    static int GREEN, GREEN_SOFT, GREEN_BORDER;
+    static int AMBER, AMBER_SOFT, AMBER_BORDER;
+    static int RED, RED_SOFT, RED_BORDER;
 
-    static final int PRIMARY = Color.parseColor("#2563EB");
-    static final int PRIMARY_DARK = Color.parseColor("#1D4ED8");
-    static final int PRIMARY_SOFT = Color.parseColor("#EFF4FF");
-    static final int PRIMARY_BORDER = Color.parseColor("#B2CCFF");
+    /** 由 Activity 在 buildUi 之前调用 */
+    static void init(boolean nightMode) {
+        night = nightMode;
+        if (nightMode) {
+            BG = Color.parseColor("#0F1419");
+            SURFACE = Color.parseColor("#1A2028");
+            SURFACE_2 = Color.parseColor("#232B36");
+            BORDER = Color.parseColor("#2E3844");
+            BORDER_SOFT = Color.parseColor("#262F3A");
 
-    static final int GREEN = Color.parseColor("#067647");
-    static final int GREEN_SOFT = Color.parseColor("#ECFDF3");
-    static final int GREEN_BORDER = Color.parseColor("#A6F4C5");
+            TEXT = Color.parseColor("#F0F4F8");
+            TEXT_2 = Color.parseColor("#B8C4D2");
+            MUTED = Color.parseColor("#7C8896");
 
-    static final int AMBER = Color.parseColor("#B54708");
-    static final int AMBER_SOFT = Color.parseColor("#FFFAEB");
-    static final int AMBER_BORDER = Color.parseColor("#FEDF89");
+            PRIMARY = Color.parseColor("#4F8CFF");
+            PRIMARY_DARK = Color.parseColor("#3B76E8");
+            PRIMARY_SOFT = Color.parseColor("#1E2A3D");
+            PRIMARY_BORDER = Color.parseColor("#3A5480");
 
-    static final int RED = Color.parseColor("#B42318");
-    static final int RED_SOFT = Color.parseColor("#FEF3F2");
-    static final int RED_BORDER = Color.parseColor("#FECDCA");
+            GREEN = Color.parseColor("#34D399");
+            GREEN_SOFT = Color.parseColor("#123326");
+            GREEN_BORDER = Color.parseColor("#1E5A42");
+
+            AMBER = Color.parseColor("#FBBF24");
+            AMBER_SOFT = Color.parseColor("#3A2C10");
+            AMBER_BORDER = Color.parseColor("#6B5418");
+
+            RED = Color.parseColor("#F87171");
+            RED_SOFT = Color.parseColor("#3A1E1E");
+            RED_BORDER = Color.parseColor("#6B2E2E");
+        } else {
+            BG = Color.parseColor("#F4F6FA");
+            SURFACE = Color.parseColor("#FFFFFF");
+            SURFACE_2 = Color.parseColor("#F8FAFC");
+            BORDER = Color.parseColor("#E4E9F0");
+            BORDER_SOFT = Color.parseColor("#EEF2F7");
+
+            TEXT = Color.parseColor("#101828");
+            TEXT_2 = Color.parseColor("#475467");
+            MUTED = Color.parseColor("#98A2B3");
+
+            PRIMARY = Color.parseColor("#2563EB");
+            PRIMARY_DARK = Color.parseColor("#1D4ED8");
+            PRIMARY_SOFT = Color.parseColor("#EFF4FF");
+            PRIMARY_BORDER = Color.parseColor("#B2CCFF");
+
+            GREEN = Color.parseColor("#067647");
+            GREEN_SOFT = Color.parseColor("#ECFDF3");
+            GREEN_BORDER = Color.parseColor("#A6F4C5");
+
+            AMBER = Color.parseColor("#B54708");
+            AMBER_SOFT = Color.parseColor("#FFFAEB");
+            AMBER_BORDER = Color.parseColor("#FEDF89");
+
+            RED = Color.parseColor("#B42318");
+            RED_SOFT = Color.parseColor("#FEF3F2");
+            RED_BORDER = Color.parseColor("#FECDCA");
+        }
+    }
+
+    /** 主按钮上的文字色（深色模式下用深色字，浅色模式下用白字） */
+    static int onPrimary() {
+        return night ? Color.parseColor("#0B1220") : Color.WHITE;
+    }
+
+    /** 白色卡片上的按钮文字 */
+    static int onAccentText() {
+        return night ? Color.parseColor("#0B1220") : Color.WHITE;
+    }
+
+    static {
+        init(false);
+    }
 
     // ---------- 单位 ----------
     static int dp(Context c, float v) {
