@@ -51,6 +51,11 @@ final class Prefs {
         sp.edit().putInt("floor_" + norm(mac), floor).apply();
     }
 
+    /** 清空所有自定义名字与楼层 */
+    void clearAll() {
+        sp.edit().clear().apply();
+    }
+
     private static String norm(String mac) {
         return mac == null ? "" : mac.replace(":", "").toUpperCase();
     }

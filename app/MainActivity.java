@@ -199,6 +199,11 @@ public class MainActivity extends Activity {
     private TextView debugToggle;
     private View scanDot;
     private boolean debugExpanded = false;
+    private boolean showAllDevices = false;
+    private LinearLayout updateBanner;
+    private TextView updateBannerTv;
+    private String pendingUpdateUrl;
+    private boolean downloading = false;
     private boolean uiConnError = false;
     private volatile boolean gotRxSinceStart = false;
     private int fallbackCount = 0;
@@ -431,7 +436,13 @@ public class MainActivity extends Activity {
             bluetoothAdapter = bm.getAdapter();
         }
 
-        buildUi();
+        try {
+            buildUi();
+        } catch (Throwable t) {
+            LogSink.e("buildUi 崩溃", t);
+            showCrashScreen(t);
+            return;
+        }
 
         IntentFilter f = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
         if (Build.VERSION.SDK_INT >= 33) {
@@ -444,6 +455,14 @@ public class MainActivity extends Activity {
         mainHandler.post(uiTicker);
 
         startScan();
+
+        // 启动后静默检查更新（无更新不打扰）
+        mainHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                new UpdateChecker(MainActivity.this).check(false, updateListener);
+            }
+        }, 2500);
     }
 
     @Override
@@ -487,6 +506,32 @@ public class MainActivity extends Activity {
     // =====================================================================
     // 前端：整体结构
     // =====================================================================
+    /** 界面积木崩溃时，把原因直接显示出来，绝不白屏 */
+    private void showCrashScreen(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("启动失败\n\n");
+        sb.append(t.getClass().getName()).append("\n");
+        if (t.getMessage() != null) sb.append(t.getMessage()).append("\n\n");
+        StackTraceElement[] st = t.getStackTrace();
+        for (int i = 0; i < Math.min(6, st.length); i++) {
+            sb.append("  at ").append(st[i]).append("\n");
+        }
+        sb.append("\n请把这段截图发给开发者");
+
+        TextView tv = new TextView(this);
+        tv.setText(sb.toString());
+        tv.setTextSize(11);
+        tv.setTextColor(Color.parseColor("#101828"));
+        tv.setBackgroundColor(Color.parseColor("#F4F6FA"));
+        tv.setPadding(dp(20), dp(60), dp(20), dp(20));
+        tv.setTextIsSelectable(true);
+
+        ScrollView sc = new ScrollView(this);
+        sc.setBackgroundColor(Color.parseColor("#F4F6FA"));
+        sc.addView(tv);
+        setContentView(sc);
+    }
+
     private void buildUi() {
         LinearLayout root = vbox(this);
         root.setBackgroundColor(BG);
@@ -526,6 +571,17 @@ public class MainActivity extends Activity {
             }
         });
         appBar.addView(floorBtn);
+
+        TextView moreBtn = medium(text(this, "⋯", 20, TEXT_2));
+        moreBtn.setGravity(Gravity.CENTER);
+        moreBtn.setPadding(dp(10), 0, dp(2), dp(6));
+        moreBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showMenu();
+            }
+        });
+        appBar.addView(moreBtn);
         root.addView(appBar);
 
         View appBarLine = new View(this);
@@ -546,6 +602,28 @@ public class MainActivity extends Activity {
         homePage.addView(homeContent);
         content.addView(homePage, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 更新横幅（默认隐藏）
+        updateBanner = hbox(this);
+        updateBanner.setBackground(stroke(this, PRIMARY_SOFT, PRIMARY_BORDER, 12));
+        updateBanner.setPadding(dp(12), dp(12), dp(12), dp(12));
+        updateBannerTv = medium(text(this, "", 13, PRIMARY_DARK));
+        updateBannerTv.setLayoutParams(weight(this, 1f));
+        updateBanner.addView(updateBannerTv);
+        TextView updateGo = medium(text(this, "更新", 13, Color.WHITE));
+        updateGo.setGravity(Gravity.CENTER);
+        updateGo.setBackground(fill(this, PRIMARY, 8));
+        updateGo.setPadding(dp(14), dp(6), dp(14), dp(6));
+        updateGo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startDownload();
+            }
+        });
+        updateBanner.addView(updateGo);
+        updateBanner.setVisibility(View.GONE);
+        homeContent.addView(updateBanner, margins(this,
+                lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT), 0, 0, 0, 12));
 
         bannerBox = hbox(this);
         bannerBox.setBackground(stroke(this, RED_SOFT, RED_BORDER, 12));
@@ -858,6 +936,108 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** 更新回调：只用页面横幅，不用 Dialog */
+    private final UpdateChecker.Listener updateListener = new UpdateChecker.Listener() {
+        @Override
+        public void onUpdateAvailable(String versionName, String notes, String url) {
+            pendingUpdateUrl = url;
+            updateBannerTv.setText("发现新版本 " + versionName + "，点右侧更新");
+            updateBanner.setVisibility(View.VISIBLE);
+            log("发现新版本 " + versionName);
+        }
+
+        @Override
+        public void onUpToDate(String currentVersion) {
+            toast("已是最新版本 " + currentVersion);
+        }
+
+        @Override
+        public void onCheckFailed(String reason) {
+            toast("检查更新失败：" + reason);
+        }
+
+        @Override
+        public void onProgress(int percent) {
+            if (percent < 0) {
+                downloading = false;
+                updateBannerTv.setText("下载失败，点右侧重试");
+            } else if (percent >= 100) {
+                updateBannerTv.setText("下载完成，正在安装…");
+            } else {
+                updateBannerTv.setText("正在下载 " + percent + "%");
+            }
+        }
+    };
+
+    private void startDownload() {
+        if (downloading) {
+            toast("正在下载，请稍候");
+            return;
+        }
+        if (pendingUpdateUrl == null || pendingUpdateUrl.isEmpty()) {
+            toast("没有可用的更新地址");
+            return;
+        }
+        downloading = true;
+        updateBannerTv.setText("开始下载…");
+        new UpdateChecker(this).download(pendingUpdateUrl, updateListener);
+    }
+
+    /** 顶部「⋯」菜单 */
+    private void showMenu() {
+        final String[] items = {
+                showAllDevices ? "关闭诊断模式" : "诊断模式（查看所有蓝牙设备）",
+                "检查更新（当前 " + UpdateChecker.currentVersionName(this) + "）",
+                "使用帮助",
+                "清空设备名字与楼层"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("菜单")
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        switch (which) {
+                            case 0:
+                                showAllDevices = !showAllDevices;
+                                synchronized (machines) {
+                                    machines.clear();
+                                }
+                                applyHysteresisSort();
+                                renderDeviceList();
+                                toast(showAllDevices
+                                        ? "诊断模式已开：显示全部蓝牙设备"
+                                        : "已关闭诊断模式");
+                                break;
+                            case 1:
+                                toast("正在检查更新…");
+                                new UpdateChecker(MainActivity.this).check(true, updateListener);
+                                break;
+                            case 2:
+                                showHelp();
+                                break;
+                            case 3:
+                                new AlertDialog.Builder(MainActivity.this)
+                                        .setTitle("确认清空？")
+                                        .setMessage("会删除你给设备起的名字和楼层设置。")
+                                        .setPositiveButton("清空", new android.content.DialogInterface.OnClickListener() {
+                                            @Override
+                                            public void onClick(android.content.DialogInterface d, int w) {
+                                                prefs.clearAll();
+                                                myFloor = 0;
+                                                floorBtn.setText("我的楼层");
+                                                renderDeviceList();
+                                                toast("已清空");
+                                            }
+                                        })
+                                        .setNegativeButton("取消", null)
+                                        .show();
+                                break;
+                        }
+                    }
+                })
+                .show();
+    }
+
     private void showHelp() {
         new AlertDialog.Builder(this)
                 .setTitle("怎么用")
@@ -870,8 +1050,29 @@ public class MainActivity extends Activity {
                         + "· 确认蓝牙和定位权限都已开启\n"
                         + "· 点「机型不对？切换」换一种设备类型\n\n"
                         + "日志（离线排查用）\n" + LogSink.currentPath())
-                .setPositiveButton("知道了", null)
-                .setNeutralButton("导出日志", new android.content.DialogInterface.OnClickListener() {
+                .setPositiveButton("检查更新（当前 " + UpdateChecker.currentVersionName(this) + "）",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface dialog, int which) {
+                                toast("正在检查更新…");
+                                new UpdateChecker(MainActivity.this).check(true, updateListener);
+                            }
+                        })
+                .setNeutralButton(showAllDevices ? "关闭诊断模式" : "诊断模式", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        showAllDevices = !showAllDevices;
+                        synchronized (machines) {
+                            machines.clear();
+                        }
+                        applyHysteresisSort();
+                        renderDeviceList();
+                        toast(showAllDevices
+                                ? "诊断模式：显示全部蓝牙设备（不可启动）"
+                                : "已关闭诊断模式");
+                    }
+                })
+                .setNegativeButton("导出日志", new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface dialog, int which) {
                         shareLog();
@@ -1126,7 +1327,7 @@ public class MainActivity extends Activity {
     /** 只用来判断协议类型，不再作为「这是洗衣设备」的依据 */
     private static String protocolFromUuids(ScanRecord record) {
         List<ParcelUuid> uuids = (record != null) ? record.getServiceUuids() : null;
-        if (uuids == null) return "AUTO";
+        if (uuids == null || uuids.isEmpty()) return "AUTO";   // 连上后再确认
         String best = "AUTO";
         for (ParcelUuid pu : uuids) {
             String u = short16(pu.getUuid());
@@ -1200,6 +1401,16 @@ public class MainActivity extends Activity {
         if (advName == null || advName.isEmpty()) advName = dev.getName();
 
         LaundryProbeResult probe = auditLaundryDevice(mac, advName, record);
+        if (!probe.matched && showAllDevices) {
+            // 诊断模式：不认识的设备也列出来，名字里带 UUID，方便现场判断协议
+            String uu = shortUuidList(record);
+            String label = "未识别 " + (advName == null || advName.isEmpty() ? mac.substring(9) : advName)
+                    + (uu.isEmpty() ? "" : "  [" + uu + "]");
+            probe.matched = true;
+            probe.proto = "RAW";
+            probe.parsedName = label;
+            probe.isDryer = false;
+        }
         if (!probe.matched) {
             Log.d("BleScan", "skip " + mac + " name=" + advName
                     + " uuids=" + shortUuidList(record) + " rssi=" + result.getRssi());
@@ -1455,6 +1666,7 @@ public class MainActivity extends Activity {
         StringBuilder sub = new StringBuilder();
         sub.append(f > 0 ? f + " 楼 · " : "");
         sub.append(m.isDryer ? "烘干机" : "洗衣机");
+        if ("AUTO".equals(m.proto)) sub.append("（连上自动识别）");
         sub.append(" · 约 ").append(String.format("%.1f", m.getDistance())).append(" 米");
         if (renamed) sub.append(" · ").append(m.name);
         TextView subTv = text(this, sub.toString(), 12, MUTED);
@@ -1674,6 +1886,25 @@ public class MainActivity extends Activity {
                 @Override
                 public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
                     if (gatt != currentGatt) return;
+                    if (status != BluetoothGatt.GATT_SUCCESS
+                            && newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        // 133/147 多为超距或设备已被占用；8 是链路超时
+                        String why;
+                        switch (status) {
+                            case 133: why = "设备拒绝或已被其他手机占用"; break;
+                            case 147: why = "超出连接距离，请靠近设备"; break;
+                            case 8:   why = "链路超时，设备可能已休眠"; break;
+                            case 19:  why = "对端主动断开"; break;
+                            default:  why = "连接被拒（status=" + status + "）"; break;
+                        }
+                        isConnecting = false;
+                        isReady = false;
+                        setStartEnabled(false);
+                        setStatus("✗ 连接失败：" + why);
+                        log("! 连接失败 status=" + status + " (" + why + ")");
+                        closeGatt();
+                        return;
+                    }
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         setStatus("◐ 已连接，正在读取服务…");
                         log("✓ GATT 已连接");
@@ -1747,14 +1978,33 @@ public class MainActivity extends Activity {
                         }
                     }
 
+                    // 未知服务：进入通用模式，挑第一个可写 + 第一个可通知
                     if (writeCh == null) {
+                        BluetoothGattService picked = null;
                         for (BluetoothGattService svc : gatt.getServices()) {
                             BluetoothGattCharacteristic c = firstWritable(svc);
                             if (c != null) {
                                 writeCh = c;
-                                // 找不到已知服务就不猜协议，留给 doStartCommand 拒绝发送
+                                picked = svc;
                                 break;
                             }
+                        }
+                        if (writeCh != null) {
+                            currentProto = "GENERIC";
+                            if (notifyCh == null && picked != null) {
+                                notifyCh = firstNotifiable(picked);
+                            }
+                            if (notifyCh == null) {
+                                for (BluetoothGattService svc : gatt.getServices()) {
+                                    BluetoothGattCharacteristic n = firstNotifiable(svc);
+                                    if (n != null) {
+                                        notifyCh = n;
+                                        break;
+                                    }
+                                }
+                            }
+                            log("! 未知服务，进入通用模式 write=" + writeCh.getUuid()
+                                    + " notify=" + (notifyCh != null ? notifyCh.getUuid() : "无"));
                         }
                     }
 
@@ -1800,14 +2050,22 @@ public class MainActivity extends Activity {
                         log("! 服务枚举完成但无可写通道");
                     } else {
                         isReady = true;
-                        setStatus("● 已就绪，可以启动");
+                        if ("GENERIC".equals(currentProto)) {
+                            setStatus("● 已就绪（通用模式，明文指令）");
+                        } else {
+                            setStatus("● 已就绪，可以启动");
+                        }
                         log("✓ 服务就绪 " + currentProto + " write=" + writeCh.getUuid());
                         setStartEnabled(true);
                     }
                     mainHandler.post(new Runnable() {
                         @Override
                         public void run() {
+                            if (currentTarget != null) {
+                                currentTarget.proto = currentProto;
+                            }
                             refreshControlHeader();
+                            renderDeviceList();
                         }
                     });
                 }
@@ -1906,8 +2164,16 @@ public class MainActivity extends Activity {
             } else {
                 sendHnhStart();
             }
+        } else if ("RAW".equals(currentProto)) {
+            setStatus("✗ 这是诊断模式扫描到的未知设备，仅供查看");
+            resetStartBtn();
+            return;
+        } else if ("GENERIC".equals(currentProto)) {
+            // 通用模式：按 YQ 明文格式下发，覆盖「换了 UUID 但协议相同」的板子
+            String cmd = "X5750000" + pulse;
+            queueSend(cmd.getBytes(StandardCharsets.UTF_8));
+            log("→ 通用模式下发明文: " + cmd);
         } else {
-            // 协议未识别：不发送任何猜测指令，避免未知设备被乱写一通
             setStatus("✗ 未识别该设备协议（" + currentProto + "），已停止发送");
             log("! proto=" + currentProto + " 非 YQ/HNH，拒绝盲发");
             resetStartBtn();

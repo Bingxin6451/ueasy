@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 cd "$(dirname "$0")"
-AJAR=/tmp/android-all.jar
-R8=/tmp/r8.jar
+# 依赖目录：优先项目内 .tools（不会被系统清理），其次 /tmp
+TOOLS="$(cd "$(dirname "$0")/.." && pwd)/.tools"
+AJAR="$TOOLS/android.jar"
+[ -f "$AJAR" ] || AJAR=/tmp/android-all.jar
+R8="$TOOLS/r8.jar"
+[ -f "$R8" ] || R8=/tmp/r8.jar
 APKTOOL=/tmp/apktool.jar
 JDK=/opt/homebrew/opt/openjdk@27/bin
 export PATH="$JDK:$PATH"
@@ -10,7 +14,7 @@ export PATH="$JDK:$PATH"
 # 1. 编译
 rm -rf classes dexout out.apk res.zip
 mkdir -p classes dexout
-javac -source 11 -target 11 -classpath "$AJAR" -d classes MainActivity.java UiKit.java LogSink.java Prefs.java
+javac -source 11 -target 11 -classpath "$AJAR" -d classes MainActivity.java UiKit.java LogSink.java Prefs.java UpdateChecker.java
 echo "[OK] javac"
 
 # 2. dex via r8(d8)
@@ -20,6 +24,8 @@ echo "[OK] d8"
 # 3. 定位 aapt2：优先 $AAPT2，其次 build-tools，最后从 apktool.jar 提取
 if [ -n "$AAPT2_BIN" ] && [ -x "$AAPT2_BIN" ]; then
   AAPT2="$AAPT2_BIN"
+elif [ -x "$TOOLS/aapt2" ]; then
+  AAPT2="$TOOLS/aapt2"
 elif [ -x /tmp/btools/android-14/aapt2 ]; then
   AAPT2=/tmp/btools/android-14/aapt2
 elif [ -f "$APKTOOL" ]; then
